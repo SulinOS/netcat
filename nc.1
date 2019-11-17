@@ -33,7 +33,7 @@
 .Nd arbitrary TCP and UDP connections and listens
 .Sh SYNOPSIS
 .Nm nc
-.Op Fl 46CDdFhklNnrStUuvz
+.Op Fl 46bCDdFhklNnrStUuvZz
 .Op Fl I Ar length
 .Op Fl i Ar interval
 .Op Fl M Ar ttl
@@ -93,6 +93,8 @@ The options are as follows:
 Use IPv4 addresses only.
 .It Fl 6
 Use IPv6 addresses only.
+.It Fl b
+Allow broadcast.
 .It Fl C
 Send CRLF as line-ending.  Each line feed (LF) character from the input
 data is translated into CR+LF before being written to the socket.  Line
@@ -180,13 +182,15 @@ Proxy authentication is only supported for HTTP CONNECT proxies at present.
 Specify the source port
 .Nm
 should use, subject to privilege restrictions and availability.
-.It Fl R Ar CAfile
-Load the root CA bundle for TLS certificate verification from
-.Ar CAfile ,
-in PEM format, instead of
-.Pa /etc/ssl/cert.pem .
-Requires
-.Fl c .
+.It Fl q Ar seconds
+after EOF on stdin, wait the specified number of
+.Ar seconds
+and then quit. If
+.Ar seconds
+is negative, wait forever (default).  Specifying a non-negative
+.Ar seconds
+implies
+.Fl N .
 .It Fl r
 Choose source and/or destination ports randomly
 instead of sequentially within a range or in the order that the system

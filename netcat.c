@@ -274,9 +274,9 @@ main(int argc, char *argv[])
 
 	while ((ch = getopt(argc, argv,
 # if defined(TLS)
-	    "46C:cDde:FH:hI:i:K:klM:m:NnO:o:P:p:R:rSs:T:tUuV:vW:w:X:x:Z:z"))
+	    "46bC:cDde:FH:hI:i:K:klM:m:NnO:o:P:p:q:R:rSs:T:tUuV:vW:w:X:x:Z:z"))
 # else
-	    "46CDdFhI:i:klM:m:NnO:P:p:rSs:T:tUuV:vW:w:X:x:z"))
+	    "46bCDdFhI:i:klM:m:NnO:P:p:q:rSs:T:tUuV:vW:w:X:x:Zz"))
 # endif
 	    != -1) {
 		switch (ch) {
@@ -506,28 +506,46 @@ main(int argc, char *argv[])
 	argc -= optind;
 	argv += optind;
 
+# if defined(RT_TABLEID_MAX)
 	if (rtableid >= 0)
 		if (setrtable(rtableid) == -1)
 			err(1, "setrtable");
+# endif
 
 	/* Cruft to make sure options are clean, and used properly. */
-	if (argv[0] && !argv[1] && family == AF_UNIX) {
-# if defined(IPPROTO_DCCP) && defined(SOCK_DCCP)
-		if (dccpflag)
-			errx(1, "cannot use -Z and -U");
-# endif
-		host = argv[0];
-		uport = NULL;
-	} else if (argv[0] && !argv[1]) {
-		if (!lflag)
-			usage(1);
-		uport = &argv[0];
-		host = NULL;
-	} else if (argv[0] && argv[1]) {
+	if (argc == 0 && lflag) {
+		uport = &pflag;
+		host = sflag;
+	} else if (argc == 1 && !pflag && !sflag) {
+		if (family == AF_UNIX) {
+			host = argv[0];
+			uport = NULL;
+		} else if (lflag) {
+			host  = NULL;
+			uport = argv;
+		}
+	} else if (argc >= 2) {
+		if (lflag && (pflag || sflag || argc > 2))
+			usage(1); /* conflict */
 		host = argv[0];
 		uport = &argv[1];
 	} else
 		usage(1);
+
+	if (family == AF_UNIX) {
+# if defined(IPPROTO_DCCP) && defined(SOCK_DCCP)
+		if (dccpflag)
+			errx(1, "cannot use -Z and -U");
+# endif
+		if (uport && *uport)
+			errx(1, "cannot use port with -U");
+		if (!host)
+			errx(1, "missing socket pathname");
+	} else if (!uport || !*uport)
+		errx(1, "missing port number");
+
+	if (lflag && zflag)
+		errx(1, "cannot use -z and -l");
 
 # if defined(TLS)
 	if (usetls) {
@@ -552,15 +570,19 @@ main(int argc, char *argv[])
 				err(1, "unveil");
 		}
 	}
+# endif
 
 	if (!lflag && kflag)
 		errx(1, "must use -l with -k");
+# if defined(TLS)
 	if (uflag && usetls)
 		errx(1, "cannot use -c and -u");
 	if ((family == AF_UNIX) && usetls)
 		errx(1, "cannot use -c and -U");
+# endif
 	if ((family == AF_UNIX) && Fflag)
 		errx(1, "cannot use -F and -U");
+# if defined(TLS)
 	if (Fflag && usetls)
 		errx(1, "cannot use -c and -F");
 	if (TLSopt && !usetls)
@@ -708,7 +730,7 @@ main(int argc, char *argv[])
 			else
 				s = unix_listen(host);
 		} else
-			s = local_listen(host, uport, hints);
+			s = local_listen(host, *uport, hints);
 		if (s < 0)
 			err(1, NULL);
 
@@ -1782,56 +1804,61 @@ strtoport(char *portstr, int udp)
  * that we should try to connect to.
  */
 void
-build_ports(char *p)
+build_ports(char **p)
 {
 	struct servent *sv;
 	char *n;
 	int hi, lo, cp;
 	int x = 0;
+	int i;
 
-	sv = getservbyname(p, uflag ? "udp" : "tcp");
-	if (sv) {
-		if (asprintf(&portlist[0], "%d", ntohs(sv->s_port)) < 0)
-			err(1, "asprintf");
-	} else if (isdigit((unsigned char)*p) && (n = strchr(p, '-')) != NULL) {
-		*n = '\0';
-		n++;
+	char *proto = proto_name(uflag, dccpflag);
+	for (i = 0; p[i] != NULL; i++) {
+		sv = getservbyname(p[i], proto);
+		if (sv) {
+			if (asprintf(&portlist[x], "%d", ntohs(sv->s_port)) < 0)
+				err(1, "asprintf");
+			x++;
+		} else if (isdigit((unsigned char)*p[i]) && (n = strchr(p[i], '-')) != NULL) {
+			*n = '\0';
+			n++;
 
-		/* Make sure the ports are in order: lowest->highest. */
-		hi = strtoport(n, uflag);
-		lo = strtoport(p, uflag);
-		if (lo > hi) {
-			cp = hi;
-			hi = lo;
-			lo = cp;
-		}
-
-		/*
-		 * Initialize portlist with a random permutation.  Based on
-		 * Knuth, as in ip_randomid() in sys/netinet/ip_id.c.
-		 */
-		if (rflag) {
-			for (x = 0; x <= hi - lo; x++) {
-				cp = arc4random_uniform(x + 1);
-				portlist[x] = portlist[cp];
-				if (asprintf(&portlist[cp], "%d", x + lo) < 0)
-					err(1, "asprintf");
+			/* Make sure the ports are in order: lowest->highest. */
+			hi = strtoport(n, uflag);
+			lo = strtoport(p[i], uflag);
+			if (lo > hi) {
+				cp = hi;
+				hi = lo;
+				lo = cp;
 			}
-		} else { /* Load ports sequentially. */
+
+			/* Load ports sequentially. */
 			for (cp = lo; cp <= hi; cp++) {
 				if (asprintf(&portlist[x], "%d", cp) < 0)
 					err(1, "asprintf");
 				x++;
 			}
+		} else {
+			hi = strtoport(p[i], uflag);
+			if (asprintf(&portlist[x], "%d", hi) < 0)
+				err(1, "asprintf");
+			x++;
 		}
-	} else {
-		char *tmp;
+	}
 
-		hi = strtoport(p, uflag);
-		if (asprintf(&tmp, "%d", hi) != -1)
-			portlist[0] = tmp;
-		else
-			err(1, NULL);
+	/*
+	 * Initialize portlist with a random permutation using
+	 * Fisher–Yates shuffle.
+	 */
+	if (rflag) {
+		for (i = x-1; i > 0; i--) {
+			cp = arc4random_uniform(i+1);
+			if (cp != i) {
+				n = portlist[i];
+				portlist[i] = portlist[cp];
+				portlist[cp] = n;
+			}
+		}
 	}
 }
 
@@ -1865,10 +1892,26 @@ set_common_sockopts(int s, const struct sockaddr* sa)
 	int x = 1;
 	int af = sa->sa_family;
 
-# if defined(TCP_MD5SIG)
-	if (Sflag) {
-		if (setsockopt(s, IPPROTO_TCP, TCP_MD5SIG,
+# if defined(SO_BROADCAST)
+	if (bflag) {
+		/* allow datagram sockets to send packets to a broadcast address
+		 * (this option has no effect on stream-oriented sockets) */
+		if (setsockopt(s, SOL_SOCKET, SO_BROADCAST,
 			&x, sizeof(x)) == -1)
+			err(1, NULL);
+	}
+# endif
+# if defined(TCP_MD5SIG) && defined(TCP_MD5SIG_MAXKEYLEN)
+	if (Sflag) {
+		struct tcp_md5sig sig;
+		memset(&sig, 0, sizeof(sig));
+		memcpy(&sig.tcpm_addr, sa, sizeof(struct sockaddr_storage));
+		sig.tcpm_keylen = TCP_MD5SIG_MAXKEYLEN < strlen(Sflag_password)
+			? TCP_MD5SIG_MAXKEYLEN
+			: strlen(Sflag_password);
+		strlcpy(sig.tcpm_key, Sflag_password, sig.tcpm_keylen);
+		if (setsockopt(s, IPPROTO_TCP, TCP_MD5SIG,
+			&sig, sizeof(sig)) == -1)
 			err(1, NULL);
 	}
 # endif
@@ -2140,6 +2183,7 @@ help(void)
 	fprintf(stderr, "\tCommand Summary:\n\
 	\t-4		Use IPv4\n\
 	\t-6		Use IPv6\n\
+	\t-b		Allow broadcast\n\
 	\t-C		Send CRLF as line-ending\n\
 	\t-D		Enable the debug socket option\n\
 	\t-d		Detach from stdin\n\
@@ -2180,7 +2224,7 @@ void
 usage(int ret)
 {
 	fprintf(stderr,
-	    "usage: nc [-46CDdFhklNnrStUuvz] [-I length] [-i interval] [-M ttl]\n"
+	    "usage: nc [-46CDdFhklNnrStUuvZz] [-I length] [-i interval] [-M ttl]\n"
 	    "\t  [-m minttl] [-O length] [-P proxy_username] [-p source_port]\n"
 	    "\t  [-q seconds] [-s source] [-T keyword] [-V rtable] [-W recvlimit] "
 	    "[-w timeout]\n"
